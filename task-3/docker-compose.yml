@@ -1,0 +1,35 @@
+version: "3.2"
+
+services:
+  master_node:
+    build:
+      context: master/.
+      cache_from:
+        - master_node:latest
+    container_name: master_node
+    image: master_node:latest
+    hostname: master_node
+    ports:
+      - 8080:8080
+
+  secondary_1_node:
+    build:
+      context: secondary_1/.
+      cache_from:
+        - secondary_1_node:latest
+    container_name: secondary_1_node
+    image: secondary_1_node:latest
+    hostname: secondary_1_node
+    ports:
+      - 8081:8081
+
+  secondary_2_node:
+    build:
+      context: secondary_2/.
+      cache_from:
+        - secondary_2_node:latest
+    container_name: secondary_2_node
+    image: secondary_2_node:latest
+    hostname: secondary_2_node
+    ports:
+      - 8082:8082
