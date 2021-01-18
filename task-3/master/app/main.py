@@ -4,103 +4,203 @@ import logging
 import logging.handlers
 import sys
 import time
+import threading
+import numpy as np
+import random
 
 import aiohttp
 from aiohttp import web
 
-msgs = {'messages': []}
+msgs, ids = {'messages': []}, []
 
 
 async def homepage(request):
     return web.Response(text='This is an API homepage.')
 
 
-async def send_message(secondary_name, msg):
-    async with aiohttp.ClientSession() as session:
-        ip_addr = 'http://secondary_1_node:8081/api/append' if \
-            secondary_name == 1 else 'http://secondary_2_node:8082/api/append'
-        dumped = json.dumps(msg)
-        async with session.post(ip_addr, json=dumped) as resp: 
-            status_code = resp.status
-            txt = await resp.text()
-            return status_code, txt
+def append_not_delivered2storage(msg, status_code_1, status_code_2):
+    if status_code_1 != 200:
+        with open('master/app/not_delivered_1.json', mode='rt') as fp:
+            data = json.load(fp)
+            ids_1 = [ms['id'] for ms in data]
+            if msg['id'] not in ids_1:
+                data.append(msg)
+        
+        with open('master/app/not_delivered_1.json', mode='wt') as fp:
+            json.dump(data, fp)
+    
+    if status_code_2 != 200:
+        with open('master/app/not_delivered_2.json', mode='rt') as fp:
+            data = json.load(fp)
+            ids_2 = [ms['id'] for ms in data]
+            if msg['id'] not in ids_2:
+                data.append(msg)
+        
+        with open('master/app/not_delivered_2.json', mode='wt') as fp:
+            json.dump(data, fp)
+
+
+async def send_message(concern, msg, latch):
+    ip_addr_1, ip_addr_2 = 'http://0.0.0.0:8081/api/append', 'http://0.0.0.0:8082/api/append'
+    status_code_1, status_code_2, txt_1, txt_2 = 400, 400, '', ''
+    dumped = json.dumps(msg)
+    if concern == 1:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(ip_addr_1, json=dumped) as resp: 
+                    status_code_1 = resp.status
+                    txt_1 = await resp.text()
+                    if int(status_code_1) == 200:
+                        latch.count_down()
+            async with aiohttp.ClientSession() as session:
+                async with session.post(ip_addr_2, json=dumped) as resp: 
+                    status_code_2 = resp.status
+                    txt_2 = await resp.text()
+                    if int(status_code_1) == 200:
+                        latch.count_down()
+            append_not_delivered2storage(msg, int(status_code_1), int(status_code_2))
+        except:
+            append_not_delivered2storage(msg, int(status_code_1), int(status_code_2))
+    else:
+        if concern == 2:
+            while int(status_code_1) != 200 and int(status_code_2) != 200:
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(ip_addr_1, json=dumped) as resp: 
+                            status_code_1 = resp.status
+                            txt_1 = await resp.text()
+                            if int(status_code_1) == 200:
+                                latch.count_down()
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(ip_addr_2, json=dumped) as resp: 
+                            status_code_2 = resp.status
+                            txt_2 = await resp.text()
+                            if int(status_code_2) == 200:
+                                latch.count_down()
+                    append_not_delivered2storage(msg, int(status_code_1), int(status_code_2))
+                except:
+                    append_not_delivered2storage(msg, int(status_code_1), int(status_code_2))
+        else:
+            while int(status_code_1) + int(status_code_2) != 400:
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(ip_addr_1, json=dumped) as resp: 
+                            status_code_1 = resp.status
+                            txt_1 = await resp.text()
+                            if int(status_code_1) == 200:
+                                latch.count_down()
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(ip_addr_2, json=dumped) as resp: 
+                            status_code_2 = resp.status
+                            txt_2 = await resp.text()
+                            if int(status_code_1) == 200:
+                                latch.count_down()
+                    append_not_delivered2storage(msg, int(status_code_1), int(status_code_2))
+                except:
+                    append_not_delivered2storage(msg, int(status_code_1), int(status_code_2))
+    return status_code_1, status_code_2, txt_1, txt_2
+
+
+def between_callback(concern, msg, latch):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    loop.run_until_complete(send_message(concern, msg, latch))
+    loop.close()
 
 
 async def check_health(request):
     try:
         async with aiohttp.ClientSession() as session: 
-            ip_addr_1 = 'http://secondary_1_node:8081/api/check_health'
+            ip_addr_1 = 'http://0.0.0.0:8081/api/check_health'
             async with session.get(ip_addr_1) as resp:
                 status_code_1 = resp.status
-            
-            ip_addr_2 = 'http://secondary_2_node:8082/api/check_health'
-            async with session.get(ip_addr_2) as resp:
-                status_code_2 = resp.status
-
-            if int(status_code_1) == int(status_code_2) and int(status_code_1) == 200:
-                return web.Response(text='Healthy')
-            else:
-                raise ValueError('One of the nodes is unhealthy!')
     except:
-        return web.Response(text='Unhealthy')
+        status_code_1 = 400
+    
+    try:
+        ip_addr_2 = 'http://0.0.0.0:8082/api/check_health'
+        async with session.get(ip_addr_2) as resp:
+            status_code_2 = resp.status
+    except:
+        status_code_2 = 400
+
+    if int(status_code_1) == int(status_code_2) and int(status_code_1) == 200:
+        return web.Response(text='Both nodes are healthy')
+    else:
+        if int(status_code_1) == 200 and int(status_code_2) == 400:
+            return web.Response(text='The second node is unhealthy!')
+        elif int(status_code_2) == 200 and int(status_code_1) == 400:
+            return web.Response(text='The first node is unhealthy!')
+        else:
+            return web.Response(text='Both nodes are unhealthy')
+
+
+class CountDownLatch:
+    def __init__(self, count=1):
+        self.count = count
+        self.lock = threading.Condition()
+
+    def count_down(self):
+        try:
+            self.lock.acquire()
+            self.count -= 1
+            if self.count <= 0:
+                self.lock.notifyAll()
+        finally:
+            self.lock.release()
+
+    def wait(self):
+        try:
+            self.lock.acquire()
+            while self.count > 0:
+                self.lock.wait()
+        finally:
+            self.lock.release()
+
+
+def run(latch):
+    print('Lock is waiting...')
+    latch.wait()
+    print('Lock is running and being released')
 
 
 async def append_message(request):
     data = await request.json()
+    if int(data['id']) not in ids:
+        msgs['messages'].append(data)
+        ids.append(int(data['id']))
 
-    if not data:
-        sys.exit(1)
+    latch = CountDownLatch(int(data['concern']) - 1)
+    t1 = threading.Thread(target=run, args=(latch,))
+    t1.start()
 
-    msgs['messages'].append(data['message'])
-    if int(data['concern']) == 1:
-        return web.Response(text='Successfully appended message!')
+    print('Message has a concern: ', data['concern'])
+    t2 = threading.Thread(target=between_callback, args=(int(data['concern']), data, latch, ))
 
-    elif int(data['concern']) == 2:
-        try:
-            status_code, txt = await send_message(1, data)
-            if int(status_code) == 200:
-                return web.Response(text='Successfully appended message!')
-            else:
-                raise ValueError(txt)
-        except:
-            while True:
-                try:
-                    status_code_1, txt = await send_message(2, data)
-                    if int(status_code_1) == 200:
-                        break
-                    time.sleep(3)
-                    status_code_2, txt = await send_message(1, data)
-                    if int(status_code_2) == 200:
-                        break
-                except:
-                    continue
-            return web.Response(text='Successfully appended message!')
+    t2.start()
+    t2.join()
+    return web.Response(text='Successfully appended message!')
 
-    if int(data['concern']) == 3:
-        try:
-            status_code_1, txt_1 = await send_message(1, data)
-            status_code_2, txt_2 = await send_message(2, data)
-            if int(status_code_1) == 200 and int(status_code_2) == 200:
-                return web.Response(text='Successfully appended messages!')
-            raise ValueError(txt_1 + ', ' + txt_2)
-        except:
-            while True:
-                try:
-                    health = await check_health(None)
-                    if health.text != 'Healthy':
-                        time.sleep(3)
-                    status_code_1, txt = await send_message(2, data)
-                    time.sleep(3)
-                    status_code_2, txt = await send_message(1, data)
-                    if int(status_code_1) == 200 and int(status_code_2) == 200:
-                        break
-                except:
-                    continue
-            return web.Response(text='Successfully appended messages!')
+
+def get_ordered_slice():
+    ixs = np.argsort(ids)
+
+    sliced = []
+    for cnt, ix in enumerate(ixs):
+        if int(msgs['messages'][ix]['id']) == cnt + 1:
+            sliced.append(msgs['messages'][ix])
+        else:
+            break
+    return sliced
 
 
 async def list_messages(request):
-    return web.json_response(msgs)
+    if not msgs['messages']:
+        return 'No messages!'
+
+    sliced = get_ordered_slice()
+    return web.Response(text=str(sliced))
 
 
 app = web.Application()

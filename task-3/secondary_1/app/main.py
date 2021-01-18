@@ -7,13 +7,21 @@ from flask import request
 
 app = flask.Flask(__name__)
 app.config['DEBUG'] = True
-msgs, ids = {'messages': []}, []
+
+with open('secondary_1/app/storage.json', mode='rt') as fp:
+    msgs = json.load(fp)
+ids = [int(msg['id']) for msg in msgs['messages']]
 
 
 def generate_error():
     rand_num = random.randint(0, 20)
     if rand_num % 3 == 0:
         raise ValueError('This is just a random error to be raised')
+
+
+def write2storage():
+    with open('secondary_1/app/storage.json', mode='wt') as fp:
+        json.dump(msgs, fp)
 
 
 @app.route('/api/append', methods=['POST'])
@@ -23,6 +31,8 @@ def append():
         if int(data['id']) not in ids:
             msgs['messages'].append(data)
             ids.append(int(data['id']))
+            write2storage()
+
         generate_error()
         return 'Successfully processed message!', 200
     except:

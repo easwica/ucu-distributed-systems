@@ -7,7 +7,10 @@ from flask import request
 
 app = flask.Flask(__name__)
 app.config['DEBUG'] = True
-msgs, ids = {'messages': []}, []
+
+with open('secondary_2/app/storage.json', mode='rt') as fp:
+    msgs = json.load(fp)
+ids = [int(msg['id']) for msg in msgs['messages']]
 
 
 def generate_error():
@@ -16,15 +19,22 @@ def generate_error():
         raise ValueError('This is just a random error to be raised')
 
 
+def write2storage():
+    with open('secondary_2/app/storage.json', mode='wt') as fp:
+        json.dump(msgs, fp)
+
+
 @app.route('/api/append', methods=['POST'])
 def append():
     try:
         data = json.loads(request.json)
-        if data['id'] not in ids:
+        if int(data['id']) not in ids:
             msgs['messages'].append(data)
-            ids.append(data['id'])
+            ids.append(int(data['id']))
+            write2storage()
+
         generate_error()
-        return 'Successfully processed message!'
+        return 'Successfully processed message!', 200
     except:
         return 'Not able to process message!', 400
 
